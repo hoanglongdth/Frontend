@@ -37,6 +37,7 @@ import {
   Alert,
   TouchableOpacity,
   ActivityIndicator,
+  ScrollView,
 } from "react-native";
 import {
   Appbar,
@@ -55,6 +56,8 @@ import {
   useTheme, // Thêm luôn cái này nếu bạn làm Dark Mode
   MD3DarkTheme, // Thêm nếu làm Dark Mode
   MD3LightTheme, // Thêm nếu làm Dark Mode
+  Searchbar,
+  Menu,
 } from "react-native-paper";
 import { createStackNavigator } from "@react-navigation/stack";
 import { PieChart } from "react-native-chart-kit";
@@ -341,6 +344,18 @@ function HomeScreen({ navigation }: any) {
   const [userBaseBalance, setUserBaseBalance] = useState(0);
   const [userName, setUserName] = useState("Người dùng");
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc"); // desc: mới nhất trước, asc: cũ nhất trước
+  const [period, setPeriod] = useState<"all" | "month" | "week" | "year">(
+    "all",
+  );
+  const [profileVisible, setProfileVisible] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
+  const [userPhone, setUserPhone] = useState("");
+  const [userCreatedAt, setUserCreatedAt] = useState<Date | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState<string>("Tất cả");
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const { user } = useAuth();
   const { transactions } = useTransactions();
@@ -349,11 +364,18 @@ function HomeScreen({ navigation }: any) {
   // Lấy thông tin user từ Firestore
   useEffect(() => {
     if (user) {
+      setUserEmail(user.email || "");
       getDoc(doc(db, "users", user.uid)).then((snap) => {
         if (snap.exists()) {
           const userData = snap.data();
           setUserName(userData.fullName || "Người dùng");
           setUserBaseBalance(parseFloat(userData.initialBalance) || 0);
+          setUserPhone(userData.phone || "");
+          setUserCreatedAt(
+            userData.createdAt instanceof Date
+              ? userData.createdAt
+              : (userData.createdAt as any)?.toDate?.() || null,
+          );
         }
       });
     }
@@ -374,12 +396,51 @@ function HomeScreen({ navigation }: any) {
       : dateA.getTime() - dateB.getTime();
   });
 
-  const getChartData = () => {
+  // Lọc transactions theo search và category
+  const filteredTransactions = sortedTransactions.filter((t) => {
+    const matchesSearch =
+      searchQuery === "" ||
+      t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      t.category.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCategory =
+      categoryFilter === "Tất cả" || t.category === categoryFilter;
+    return matchesSearch && matchesCategory;
+  });
+
+  const getChartData = (period: "all" | "month" | "week" | "year") => {
     // Chỉ lấy các giao dịch là Chi tiêu (amount < 0)
-    const expenses = sortedTransactions.filter((t) => t.amount < 0);
+    const expenses = filteredTransactions.filter((t) => t.amount < 0);
+
+    // Lọc theo period
+    const now = new Date();
+    let startDate: Date;
+    switch (period) {
+      case "month":
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        break;
+      case "week":
+        const dayOfWeek = now.getDay();
+        startDate = new Date(now);
+        startDate.setDate(now.getDate() - dayOfWeek);
+        startDate.setHours(0, 0, 0, 0);
+        break;
+      case "year":
+        startDate = new Date(now.getFullYear(), 0, 1);
+        break;
+      default:
+        startDate = new Date(0); // all
+    }
+
+    const filteredExpenses = expenses.filter((t) => {
+      const tDate =
+        t.createdAt instanceof Date
+          ? t.createdAt
+          : (t.createdAt as any)?.toDate?.() || new Date();
+      return tDate >= startDate;
+    });
 
     // Nhóm theo category
-    const grouped = expenses.reduce((acc: any, curr) => {
+    const grouped = filteredExpenses.reduce((acc: any, curr) => {
       const category = curr.category || "Khác";
       const amount = Math.abs(curr.amount);
       if (!acc[category]) {
@@ -455,6 +516,29 @@ function HomeScreen({ navigation }: any) {
     return sum + (parseFloat(String(item.amount)) || 0);
   }, 0);
   const totalBalance = userBaseBalance + transactionTotal;
+
+  // Thống kê profile
+  const totalIncome = transactions.reduce(
+    (sum, item) => sum + (item.amount > 0 ? item.amount : 0),
+    0,
+  );
+  const totalExpense = transactions.reduce(
+    (sum, item) => sum + (item.amount < 0 ? Math.abs(item.amount) : 0),
+    0,
+  );
+
+  const transactionCount = transactions.length;
+
+  const handleEditTransaction = (transaction: any) => {
+    setAmount(Math.abs(transaction.amount).toString());
+    setNote(transaction.title);
+    setIsIncome(transaction.amount > 0);
+    setSelectedCategory(transaction.category);
+    setIsEditMode(true);
+    setEditingId(transaction.id);
+    setVisible(true);
+  };
+
   return (
     <SafeAreaView
       style={[
@@ -467,7 +551,10 @@ function HomeScreen({ navigation }: any) {
           title="FinanceFlow"
           titleStyle={{ fontWeight: "900", color: "#10b981" }}
         />
-        <TouchableOpacity onPress={handleLogout} style={{ marginRight: 10 }}>
+        <TouchableOpacity
+          onPress={() => setProfileVisible(true)}
+          style={{ marginRight: 10 }}
+        >
           <Avatar.Text size={35} label={userName.substring(0, 1)} />
         </TouchableOpacity>
       </Appbar.Header>
@@ -480,7 +567,7 @@ function HomeScreen({ navigation }: any) {
           }
         >
           <Card.Content>
-            <Text style={{ color: "rgba(255,255,255,0.7)" }}>
+            <Text style={{ color: "rgba(20, 19, 19, 0.7)" }}>
               Chào {userName}, số dư của bạn:
             </Text>
             <Title style={homeStyles.balanceAmount}>
@@ -490,11 +577,92 @@ function HomeScreen({ navigation }: any) {
         </Card>
 
         <FlatList
-          data={sortedTransactions}
+          data={filteredTransactions}
           keyExtractor={(item) => item.id}
           ListHeaderComponent={
             <>
-              <TransactionChart data={getChartData()} />
+              <View style={{ marginBottom: 16 }}>
+                <Title style={homeStyles.sectionTitle}>
+                  Chọn khoảng thời gian
+                </Title>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-around",
+                    marginTop: 8,
+                  }}
+                >
+                  <Button
+                    mode={period === "all" ? "contained" : "outlined"}
+                    onPress={() => setPeriod("all")}
+                    compact
+                  >
+                    Tất cả
+                  </Button>
+                  <Button
+                    mode={period === "month" ? "contained" : "outlined"}
+                    onPress={() => setPeriod("month")}
+                    compact
+                  >
+                    Tháng
+                  </Button>
+                  <Button
+                    mode={period === "week" ? "contained" : "outlined"}
+                    onPress={() => setPeriod("week")}
+                    compact
+                  >
+                    Tuần
+                  </Button>
+                  <Button
+                    mode={period === "year" ? "contained" : "outlined"}
+                    onPress={() => setPeriod("year")}
+                    compact
+                  >
+                    Năm
+                  </Button>
+                </View>
+              </View>
+              <View style={{ marginBottom: 16 }}>
+                <Title style={homeStyles.sectionTitle}>Tìm kiếm & Lọc</Title>
+                <Searchbar
+                  placeholder="Tìm kiếm giao dịch..."
+                  onChangeText={setSearchQuery}
+                  value={searchQuery}
+                  style={{ marginBottom: 8 }}
+                />
+                <Menu
+                  visible={menuVisible}
+                  onDismiss={() => setMenuVisible(false)}
+                  anchor={
+                    <Button
+                      onPress={() => setMenuVisible(true)}
+                      mode="outlined"
+                      style={{ alignSelf: "flex-start" }}
+                    >
+                      Danh mục: {categoryFilter}
+                    </Button>
+                  }
+                >
+                  <Menu.Item
+                    onPress={() => {
+                      setCategoryFilter("Tất cả");
+                      setMenuVisible(false);
+                    }}
+                    title="Tất cả"
+                  />
+                  {[...CATEGORIES.income, ...CATEGORIES.expense].map((cat) => (
+                    <Menu.Item
+                      key={cat.label}
+                      onPress={() => {
+                        setCategoryFilter(cat.label);
+                        setMenuVisible(false);
+                      }}
+                      title={cat.label}
+                    />
+                  ))}
+                </Menu>
+              </View>
+              <TransactionChart data={getChartData(period)} />
               <View
                 style={{
                   flexDirection: "row",
@@ -716,6 +884,180 @@ function HomeScreen({ navigation }: any) {
           </View>
         </Modal>
 
+        <Modal
+          visible={profileVisible}
+          onDismiss={() => setProfileVisible(false)}
+          contentContainerStyle={[
+            homeStyles.modalContainer,
+            { maxHeight: "80%" },
+          ]}
+        >
+          <ScrollView showsVerticalScrollIndicator={false}>
+            <Title
+              style={{
+                textAlign: "center",
+                marginBottom: 20,
+                color: theme.colors.primary,
+              }}
+            >
+              Thông tin cá nhân
+            </Title>
+
+            {/* Avatar và thông tin cơ bản */}
+            <View style={{ alignItems: "center", marginBottom: 24 }}>
+              <Avatar.Text
+                size={100}
+                label={userName.substring(0, 1)}
+                style={{ backgroundColor: theme.colors.primary }}
+              />
+              <Title style={{ marginTop: 16, fontSize: 24 }}>{userName}</Title>
+              <Paragraph
+                style={{
+                  fontSize: 16,
+                  color: theme.colors.onSurfaceVariant,
+                }}
+              >
+                {userEmail}
+              </Paragraph>
+              {userPhone ? (
+                <Paragraph
+                  style={{
+                    fontSize: 14,
+                    color: theme.colors.onSurfaceVariant,
+                  }}
+                >
+                  📞 {userPhone}
+                </Paragraph>
+              ) : null}
+              {userCreatedAt ? (
+                <Paragraph
+                  style={{
+                    fontSize: 14,
+                    color: theme.colors.onSurfaceVariant,
+                  }}
+                >
+                  🗓️ Tham gia: {userCreatedAt.toLocaleDateString("vi-VN")}
+                </Paragraph>
+              ) : null}
+            </View>
+
+            {/* Số dư hiện tại */}
+            <Card style={{ marginBottom: 20, borderRadius: 16, elevation: 2 }}>
+              <Card.Content style={{ alignItems: "center" }}>
+                <Text
+                  style={{
+                    fontSize: 16,
+                    fontWeight: "bold",
+                    marginBottom: 8,
+                    color: theme.colors.primary,
+                  }}
+                >
+                  💰 Số dư hiện tại
+                </Text>
+                <Title
+                  style={{
+                    fontSize: 28,
+                    color: totalBalance >= 0 ? "#10b981" : "#ef4444",
+                  }}
+                >
+                  {totalBalance.toLocaleString()} đ
+                </Title>
+              </Card.Content>
+            </Card>
+
+            {/* Thống kê giao dịch */}
+            <Title
+              style={{
+                fontSize: 18,
+                marginBottom: 16,
+                color: theme.colors.primary,
+              }}
+            >
+              📊 Thống kê giao dịch
+            </Title>
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                marginBottom: 20,
+              }}
+            >
+              <Card style={{ flex: 1, marginRight: 8, borderRadius: 12 }}>
+                <Card.Content style={{ alignItems: "center" }}>
+                  <Text
+                    style={{
+                      fontSize: 14,
+                      color: theme.colors.onSurfaceVariant,
+                    }}
+                  >
+                    Tổng thu nhập
+                  </Text>
+                  <Title style={{ fontSize: 18, color: "#10b981" }}>
+                    {totalIncome.toLocaleString()} đ
+                  </Title>
+                </Card.Content>
+              </Card>
+              <Card style={{ flex: 1, marginLeft: 8, borderRadius: 12 }}>
+                <Card.Content style={{ alignItems: "center" }}>
+                  <Text
+                    style={{
+                      fontSize: 14,
+                      color: theme.colors.onSurfaceVariant,
+                    }}
+                  >
+                    Tổng chi tiêu
+                  </Text>
+                  <Title style={{ fontSize: 18, color: "#ef4444" }}>
+                    {totalExpense.toLocaleString()} đ
+                  </Title>
+                </Card.Content>
+              </Card>
+            </View>
+            <Card style={{ borderRadius: 12, marginBottom: 24 }}>
+              <Card.Content style={{ alignItems: "center" }}>
+                <Text
+                  style={{ fontSize: 14, color: theme.colors.onSurfaceVariant }}
+                >
+                  Số giao dịch
+                </Text>
+                <Title style={{ fontSize: 18, color: theme.colors.primary }}>
+                  {transactionCount}
+                </Title>
+              </Card.Content>
+            </Card>
+
+            {/* Buttons */}
+            <View style={homeStyles.buttonRow}>
+              <Button
+                onPress={() => setProfileVisible(false)}
+                style={{ flex: 1, marginRight: 8 }}
+              >
+                Đóng
+              </Button>
+              <Button
+                mode="contained"
+                onPress={() => {
+                  setProfileVisible(false);
+                  Alert.alert("Đăng xuất", "Bạn có chắc muốn đăng xuất?", [
+                    { text: "Hủy", style: "cancel" },
+                    {
+                      text: "Đăng xuất",
+                      onPress: () => signOut(auth),
+                    },
+                  ]);
+                }}
+                style={{
+                  flex: 1,
+                  marginLeft: 8,
+                  backgroundColor: "#ef4444",
+                }}
+              >
+                Đăng xuất
+              </Button>
+            </View>
+          </ScrollView>
+        </Modal>
+
         <FAB.Group
           visible={true}
           open={fabOpen}
@@ -877,7 +1219,7 @@ const homeStyles = StyleSheet.create({
     letterSpacing: 1,
   },
   balanceAmount: {
-    color: "#fff",
+    color: "#363535",
     fontSize: 34,
     fontWeight: "800",
     marginTop: 8,
