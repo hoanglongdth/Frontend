@@ -1,50 +1,57 @@
-# Welcome to your Expo app 👋
+# FinanceFlow - Ứng dụng Quản lý Chi tiêu
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Một ứng dụng React Native/Expo để quản lý chi tiêu cá nhân với Firebase.
 
-## Get started
+## Tính năng
 
-1. Install dependencies
+- ✅ Đăng nhập/Đăng ký với Firebase Authentication
+- ✅ Theo dõi thu nhập và chi tiêu
+- ✅ Phân loại giao dịch theo danh mục
+- ✅ Hiển thị số dư tài khoản
+- ✅ Giao diện đẹp với React Native Paper
+- ✅ Hỗ trợ Dark/Light theme
 
-   ```bash
-   npm install
-   ```
+## Cấu trúc dự án
 
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
+```
+src/
+├── components/     # Các component tái sử dụng
+├── hooks/         # Custom hooks
+├── services/      # Firebase services
+├── types/         # TypeScript type definitions
+├── utils/         # Utility functions
+└── constants/     # Constants và config
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Cài đặt
 
-## Learn more
+1. Cài đặt dependencies:
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+npm install
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+2. Khởi chạy dự án:
 
-## Join the community
+```bash
+npx expo start
+```
 
-Join our community of developers creating universal apps.
+## Sử dụng
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+1. Đăng ký tài khoản mới hoặc đăng nhập
+2. Thêm giao dịch thu nhập/chi tiêu
+3. Xem số dư và lịch sử giao dịch
+
+## Công nghệ sử dụng
+
+- React Native 0.81.5
+- Expo SDK 54
+- Firebase (Auth + Firestore)
+- React Native Paper
+- TypeScript
+- React Navigation
+
+## Phát triển
+
+Dự án sử dụng cấu trúc module rõ ràng với TypeScript strict mode để đảm bảo code quality.
