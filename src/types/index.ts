@@ -4,6 +4,7 @@ export interface User {
   email: string;
   fullName: string;
   initialBalance: number;
+  budgets?: Record<string, number>;
 }
 
 export interface Transaction {

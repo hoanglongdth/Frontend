@@ -19,6 +19,7 @@ import {
   getDoc,
   deleteDoc,
 } from "firebase/firestore";
+import { getMessaging, getToken } from "firebase/messaging";
 import { CATEGORIES } from "@/constants";
 import {
   formatDisplay,
@@ -58,12 +59,18 @@ import {
   MD3LightTheme, // Thêm nếu làm Dark Mode
   Searchbar,
   Menu,
+  ProgressBar,
+  Switch,
 } from "react-native-paper";
 import { createStackNavigator } from "@react-navigation/stack";
-import { PieChart } from "react-native-chart-kit";
+import { PieChart, BarChart } from "react-native-chart-kit";
 import { Dimensions } from "react-native";
 import { Swipeable } from "react-native-gesture-handler";
 import Component from "react-native-paper/lib/typescript/components/List/ListItem";
+import * as Sharing from "expo-sharing";
+import * as FileSystem from "expo-file-system";
+import * as Print from "expo-print";
+import * as MailComposer from "expo-mail-composer";
 import { useColorScheme } from "react-native";
 const Stack = createStackNavigator();
 
@@ -333,6 +340,59 @@ const TransactionChart = ({ data }: { data: any[] }) => {
     </Card>
   );
 };
+// --- COMPONENT BIỂU ĐỒ SO SÁNH THÁNG ---
+const MonthlyComparisonChart = ({ data }: { data: any }) => {
+  const theme = useTheme();
+
+  return (
+    <Card
+      style={{
+        marginBottom: 20,
+        borderRadius: 24,
+        backgroundColor: "#fff",
+        elevation: 3,
+      }}
+    >
+      <Card.Content>
+        <Title
+          style={{
+            fontSize: 16,
+            marginBottom: 10,
+            fontWeight: "bold",
+            color: theme.colors.primary,
+          }}
+        >
+          📊 So sánh chi tiêu theo tháng
+        </Title>
+        <BarChart
+          data={data}
+          width={screenWidth - 80}
+          height={220}
+          chartConfig={{
+            backgroundColor: "#ffffff",
+            backgroundGradientFrom: "#ffffff",
+            backgroundGradientTo: "#ffffff",
+            decimalPlaces: 0,
+            color: (opacity = 1) => `rgba(16, 185, 129, ${opacity})`,
+            labelColor: (opacity = 1) => theme.colors.onSurface,
+            style: {
+              borderRadius: 16,
+            },
+            propsForLabels: {
+              fontSize: 12,
+            },
+          }}
+          style={{
+            marginVertical: 8,
+            borderRadius: 16,
+          }}
+          showValuesOnTopOfBars={true}
+          fromZero={true}
+        />
+      </Card.Content>
+    </Card>
+  );
+};
 // --- 3. MÀN HÌNH CHÍNH (HOME) ---
 function HomeScreen({ navigation }: any) {
   const [visible, setVisible] = useState(false);
@@ -354,14 +414,16 @@ function HomeScreen({ navigation }: any) {
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("Tất cả");
   const [menuVisible, setMenuVisible] = useState(false);
-  const [isEditMode, setIsEditMode] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [budgets, setBudgets] = useState<Record<string, number>>({});
+  const [budgetInputs, setBudgetInputs] = useState<Record<string, string>>({});
+  const [budgetSaving, setBudgetSaving] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
 
   const { user } = useAuth();
   const { transactions } = useTransactions();
   const theme = useTheme();
 
-  // Lấy thông tin user từ Firestore
+  // Load user data and setup notifications when user changes
   useEffect(() => {
     if (user) {
       setUserEmail(user.email || "");
@@ -375,6 +437,22 @@ function HomeScreen({ navigation }: any) {
             userData.createdAt instanceof Date
               ? userData.createdAt
               : (userData.createdAt as any)?.toDate?.() || null,
+          );
+          const loadedBudgets = (userData.budgets || {}) as Record<
+            string,
+            number
+          >;
+          setBudgets(loadedBudgets);
+          setBudgetInputs(
+            CATEGORIES.expense.reduce(
+              (acc, cat) => ({
+                ...acc,
+                [cat.label]: loadedBudgets[cat.label]
+                  ? String(loadedBudgets[cat.label])
+                  : "",
+              }),
+              {} as Record<string, string>,
+            ),
           );
         }
       });
@@ -459,6 +537,335 @@ function HomeScreen({ navigation }: any) {
     return Object.values(grouped);
   };
 
+  const getMonthlyComparisonData = () => {
+    const now = new Date();
+    const currentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0); // Cuối tháng trước
+
+    // Chỉ lấy các giao dịch là Chi tiêu (amount < 0)
+    const expenses = transactions.filter((t) => t.amount < 0);
+
+    // Tính tổng chi tiêu tháng hiện tại
+    const currentMonthExpenses = expenses.filter((t) => {
+      const tDate =
+        t.createdAt instanceof Date
+          ? t.createdAt
+          : (t.createdAt as any)?.toDate?.() || new Date();
+      return tDate >= currentMonth;
+    });
+
+    // Tính tổng chi tiêu tháng trước
+    const previousMonthExpenses = expenses.filter((t) => {
+      const tDate =
+        t.createdAt instanceof Date
+          ? t.createdAt
+          : (t.createdAt as any)?.toDate?.() || new Date();
+      return tDate >= previousMonth && tDate <= previousMonthEnd;
+    });
+
+    const currentMonthTotal = currentMonthExpenses.reduce(
+      (sum, t) => sum + Math.abs(t.amount),
+      0,
+    );
+    const previousMonthTotal = previousMonthExpenses.reduce(
+      (sum, t) => sum + Math.abs(t.amount),
+      0,
+    );
+
+    // Format tên tháng
+    const currentMonthName = now.toLocaleDateString("vi-VN", {
+      month: "long",
+      year: "numeric",
+    });
+    const previousMonthDate = new Date(
+      now.getFullYear(),
+      now.getMonth() - 1,
+      1,
+    );
+    const previousMonthName = previousMonthDate.toLocaleDateString("vi-VN", {
+      month: "long",
+      year: "numeric",
+    });
+
+    return {
+      labels: [previousMonthName, currentMonthName],
+      datasets: [
+        {
+          data: [previousMonthTotal, currentMonthTotal],
+        },
+      ],
+    };
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+    navigation.replace("Login");
+  };
+
+  const handleDeleteTransaction = async (transactionId: string) => {
+    try {
+      await deleteDoc(doc(db, "transactions", transactionId));
+      Alert.alert("Thành công", "Đã xóa giao dịch");
+    } catch (error: any) {
+      const errorMessage =
+        error instanceof Error ? error.message : getFirebaseErrorMessage(error);
+      Alert.alert("Lỗi", errorMessage);
+    }
+  };
+  const transactionTotal = transactions.reduce((sum, item) => {
+    return sum + (parseFloat(String(item.amount)) || 0);
+  }, 0);
+  const totalBalance = userBaseBalance + transactionTotal;
+
+  // Thống kê profile
+  const totalIncome = transactions.reduce(
+    (sum, item) => sum + (item.amount > 0 ? item.amount : 0),
+    0,
+  );
+  const totalExpense = transactions.reduce(
+    (sum, item) => sum + (item.amount < 0 ? Math.abs(item.amount) : 0),
+    0,
+  );
+
+  const transactionCount = transactions.length;
+
+  const getMonthlyCategoryExpense = (category: string) => {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
+    return transactions.reduce((sum, item) => {
+      if (item.category !== category || item.amount >= 0) return sum;
+      const createdAt =
+        item.createdAt instanceof Date
+          ? item.createdAt
+          : (item.createdAt as any)?.toDate?.();
+      if (!createdAt) return sum;
+      if (createdAt >= startOfMonth && createdAt < startOfNextMonth) {
+        return sum + Math.abs(item.amount);
+      }
+      return sum;
+    }, 0);
+  };
+
+  const budgetWarnings = CATEGORIES.expense
+    .map((cat) => {
+      const budget = budgets[cat.label] || 0;
+      if (budget <= 0) return null;
+      const spent = getMonthlyCategoryExpense(cat.label);
+      const ratio = spent / budget;
+      return {
+        category: cat.label,
+        budget,
+        spent,
+        ratio,
+        status: ratio >= 1 ? "over" : ratio >= 0.9 ? "near" : "ok",
+      };
+    })
+    .filter(
+      (
+        item,
+      ): item is {
+        category: string;
+        budget: number;
+        spent: number;
+        ratio: number;
+        status: string;
+      } => item !== null,
+    )
+    .filter((item) => item.status !== "ok");
+
+  const handleBudgetInputChange = (category: string, value: string) => {
+    setBudgetInputs((prev) => ({
+      ...prev,
+      [category]: formatDisplay(value.replace(/[^0-9]/g, "")),
+    }));
+  };
+
+  const handleSaveBudgets = async () => {
+    if (!user) return;
+    setBudgetSaving(true);
+    try {
+      const updatedBudgets = CATEGORIES.expense.reduce(
+        (acc, cat) => {
+          const amount = parseToNumber(budgetInputs[cat.label] || "0");
+          if (amount > 0) {
+            acc[cat.label] = amount;
+          }
+          return acc;
+        },
+        {} as Record<string, number>,
+      );
+      await setDoc(
+        doc(db, "users", user.uid),
+        { budgets: updatedBudgets },
+        { merge: true },
+      );
+      setBudgets(updatedBudgets);
+      Alert.alert("Thành công", "Đã lưu hạn mức ngân sách");
+    } catch (error: any) {
+      const errorMessage =
+        error instanceof Error ? error.message : getFirebaseErrorMessage(error);
+      Alert.alert("Lỗi", errorMessage);
+    } finally {
+      setBudgetSaving(false);
+    }
+  };
+
+  const handleExportReport = async () => {
+    if (!user) return;
+    setExportLoading(true);
+
+    try {
+      // Tạo nội dung HTML cho báo cáo
+      const reportDate = new Date().toLocaleDateString("vi-VN");
+      const totalIncome = transactions.reduce(
+        (sum, item) => sum + (item.amount > 0 ? item.amount : 0),
+        0,
+      );
+      const totalExpense = transactions.reduce(
+        (sum, item) => sum + (item.amount < 0 ? Math.abs(item.amount) : 0),
+        0,
+      );
+
+      let htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Báo cáo giao dịch - ${userName}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            .header { text-align: center; margin-bottom: 30px; }
+            .summary { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+            .summary-item { display: inline-block; margin: 0 20px; text-align: center; }
+            .summary-value { font-size: 24px; font-weight: bold; }
+            .income { color: #10b981; }
+            .expense { color: #ef4444; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+            th { background-color: #f8f9fa; font-weight: bold; }
+            .income-row { background-color: #f0fdf4; }
+            .expense-row { background-color: #fef2f2; }
+            .footer { margin-top: 30px; text-align: center; color: #666; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>Báo cáo giao dịch</h1>
+            <h2>${userName}</h2>
+            <p>Ngày xuất: ${reportDate}</p>
+          </div>
+
+          <div class="summary">
+            <div class="summary-item">
+              <div class="summary-value income">+${totalIncome.toLocaleString()} đ</div>
+              <div>Tổng thu nhập</div>
+            </div>
+            <div class="summary-item">
+              <div class="summary-value expense">-${totalExpense.toLocaleString()} đ</div>
+              <div>Tổng chi tiêu</div>
+            </div>
+            <div class="summary-item">
+              <div class="summary-value">${(totalIncome - totalExpense).toLocaleString()} đ</div>
+              <div>Số dư</div>
+            </div>
+          </div>
+
+          <h3>Lịch sử giao dịch chi tiết</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Ngày</th>
+                <th>Ghi chú</th>
+                <th>Danh mục</th>
+                <th>Loại</th>
+                <th>Số tiền</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+
+      // Thêm từng giao dịch vào bảng
+      sortedTransactions.forEach((transaction) => {
+        const date =
+          transaction.createdAt instanceof Date
+            ? transaction.createdAt
+            : (transaction.createdAt as any)?.toDate?.() || new Date();
+
+        const formattedDate = date.toLocaleDateString("vi-VN");
+        const type = transaction.amount > 0 ? "Thu nhập" : "Chi tiêu";
+        const amount =
+          transaction.amount > 0
+            ? `+${transaction.amount.toLocaleString()} đ`
+            : `-${Math.abs(transaction.amount).toLocaleString()} đ`;
+        const rowClass = transaction.amount > 0 ? "income-row" : "expense-row";
+
+        htmlContent += `
+          <tr class="${rowClass}">
+            <td>${formattedDate}</td>
+            <td>${transaction.title}</td>
+            <td>${transaction.category}</td>
+            <td>${type}</td>
+            <td>${amount}</td>
+          </tr>
+        `;
+      });
+
+      htmlContent += `
+            </tbody>
+          </table>
+
+          <div class="footer">
+            <p>Báo cáo được tạo bởi FinanceFlow App</p>
+            <p>Tổng số giao dịch: ${transactions.length}</p>
+          </div>
+        </body>
+        </html>
+      `;
+
+      // Tạo PDF từ HTML
+      const { uri } = await Print.printToFileAsync({
+        html: htmlContent,
+        base64: false,
+      });
+
+      // Kiểm tra xem có thể gửi email không
+      const isAvailable = await MailComposer.composeAsync({
+        subject: `Báo cáo giao dịch - ${userName}`,
+        body: `Xin chào ${userName},\n\nĐính kèm là báo cáo lịch sử giao dịch của bạn từ FinanceFlow App.\n\nThời gian xuất: ${reportDate}\nTổng giao dịch: ${transactions.length}\n\nTrân trọng,\nFinanceFlow Team`,
+        attachments: [uri],
+      });
+
+      if (!isAvailable) {
+        // Nếu không thể gửi email, cho phép chia sẻ file
+        Alert.alert(
+          "Không thể gửi email",
+          "Thiết bị của bạn không hỗ trợ gửi email. Bạn có muốn chia sẻ file báo cáo không?",
+          [
+            { text: "Hủy", style: "cancel" },
+            {
+              text: "Chia sẻ",
+              onPress: async () => {
+                if (await Sharing.isAvailableAsync()) {
+                  await Sharing.shareAsync(uri);
+                } else {
+                  Alert.alert("Lỗi", "Thiết bị không hỗ trợ chia sẻ file");
+                }
+              },
+            },
+          ],
+        );
+      }
+    } catch (error: any) {
+      console.error("Export error:", error);
+      Alert.alert("Lỗi", "Không thể xuất báo cáo. Vui lòng thử lại.");
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!amount || !note || !selectedCategory) {
       return Alert.alert(
@@ -495,48 +902,6 @@ function HomeScreen({ navigation }: any) {
         error instanceof Error ? error.message : getFirebaseErrorMessage(error);
       Alert.alert("Lỗi", errorMessage);
     }
-  };
-
-  const handleLogout = async () => {
-    await signOut(auth);
-    navigation.replace("Login");
-  };
-
-  const handleDeleteTransaction = async (transactionId: string) => {
-    try {
-      await deleteDoc(doc(db, "transactions", transactionId));
-      Alert.alert("Thành công", "Đã xóa giao dịch");
-    } catch (error: any) {
-      const errorMessage =
-        error instanceof Error ? error.message : getFirebaseErrorMessage(error);
-      Alert.alert("Lỗi", errorMessage);
-    }
-  };
-  const transactionTotal = transactions.reduce((sum, item) => {
-    return sum + (parseFloat(String(item.amount)) || 0);
-  }, 0);
-  const totalBalance = userBaseBalance + transactionTotal;
-
-  // Thống kê profile
-  const totalIncome = transactions.reduce(
-    (sum, item) => sum + (item.amount > 0 ? item.amount : 0),
-    0,
-  );
-  const totalExpense = transactions.reduce(
-    (sum, item) => sum + (item.amount < 0 ? Math.abs(item.amount) : 0),
-    0,
-  );
-
-  const transactionCount = transactions.length;
-
-  const handleEditTransaction = (transaction: any) => {
-    setAmount(Math.abs(transaction.amount).toString());
-    setNote(transaction.title);
-    setIsIncome(transaction.amount > 0);
-    setSelectedCategory(transaction.category);
-    setIsEditMode(true);
-    setEditingId(transaction.id);
-    setVisible(true);
   };
 
   return (
@@ -743,80 +1108,154 @@ function HomeScreen({ navigation }: any) {
               </TouchableOpacity>
             );
 
+            // Kiểm tra cảnh báo ngân sách cho giao dịch chi tiêu
+            const budgetWarning =
+              item.amount < 0 && budgets[item.category]
+                ? (() => {
+                    const spent = getMonthlyCategoryExpense(item.category);
+                    const budget = budgets[item.category];
+                    const ratio = spent / budget;
+                    return ratio >= 0.9 ? (ratio >= 1 ? "over" : "near") : null;
+                  })()
+                : null;
+
             return (
-              <View style={{ flexDirection: "row", alignItems: "center" }}>
+              <View style={{ marginBottom: 8 }}>
                 <Swipeable renderRightActions={renderRightActions}>
-                  <View style={{ flex: 1 }}>
-                    <List.Item
-                      title={item.title}
-                      description={`${item.category} • ${formattedDate}`}
-                      style={{ backgroundColor: theme.colors.surface }}
-                      left={(props) => (
-                        <Avatar.Icon
-                          {...props}
-                          size={40}
-                          // Icon mặc định nếu dữ liệu cũ không có icon
-                          icon={
-                            item.icon ||
-                            (item.amount > 0 ? "arrow-up" : "arrow-down")
-                          }
-                          style={{ backgroundColor: backgroundColor }}
-                          color={baseColor}
-                        />
-                      )}
-                      right={() => (
-                        <Text
-                          style={[
-                            homeStyles.amountText,
-                            { color: item.amount > 0 ? "#10b981" : "#ef4444" },
-                          ]}
+                  <Card style={homeStyles.transactionCard}>
+                    <Card.Content style={{ paddingVertical: 12 }}>
+                      <View
+                        style={{ flexDirection: "row", alignItems: "center" }}
+                      >
+                        {/* Icon và thông tin chính */}
+                        <View
+                          style={{
+                            flexDirection: "row",
+                            alignItems: "center",
+                            flex: 1,
+                          }}
                         >
-                          {item.amount > 0 ? "+" : ""}
-                          {item.amount.toLocaleString()} đ
-                        </Text>
-                      )}
-                    />
-                  </View>
+                          <Avatar.Icon
+                            size={48}
+                            icon={
+                              item.icon ||
+                              (item.amount > 0 ? "arrow-up" : "arrow-down")
+                            }
+                            style={{
+                              backgroundColor: backgroundColor,
+                              marginRight: 16,
+                              borderRadius: 12,
+                            }}
+                            color={baseColor}
+                          />
+                          <View style={{ flex: 1 }}>
+                            <Text
+                              style={{
+                                fontSize: 16,
+                                fontWeight: "600",
+                                color: theme.colors.onSurface,
+                                marginBottom: 2,
+                              }}
+                            >
+                              {item.title}
+                            </Text>
+                            <View
+                              style={{
+                                flexDirection: "row",
+                                alignItems: "center",
+                                marginBottom: 2,
+                              }}
+                            >
+                              <Text
+                                style={{
+                                  fontSize: 14,
+                                  color: theme.colors.onSurfaceVariant,
+                                  marginRight: 8,
+                                }}
+                              >
+                                {item.category}
+                              </Text>
+                              {budgetWarning && (
+                                <View
+                                  style={{
+                                    flexDirection: "row",
+                                    alignItems: "center",
+                                    backgroundColor:
+                                      budgetWarning === "over"
+                                        ? "#fee2e2"
+                                        : "#fef3c7",
+                                    paddingHorizontal: 6,
+                                    paddingVertical: 2,
+                                    borderRadius: 8,
+                                  }}
+                                >
+                                  <Avatar.Icon
+                                    size={14}
+                                    icon="alert-circle"
+                                    style={{ backgroundColor: "transparent" }}
+                                    color={
+                                      budgetWarning === "over"
+                                        ? "#b91c1c"
+                                        : "#b45309"
+                                    }
+                                  />
+                                  <Text
+                                    style={{
+                                      fontSize: 12,
+                                      color:
+                                        budgetWarning === "over"
+                                          ? "#b91c1c"
+                                          : "#b45309",
+                                      fontWeight: "500",
+                                      marginLeft: 2,
+                                    }}
+                                  >
+                                    {budgetWarning === "over"
+                                      ? "Đã vượt"
+                                      : "Sắp vượt"}
+                                  </Text>
+                                </View>
+                              )}
+                            </View>
+                            <Text
+                              style={{
+                                fontSize: 12,
+                                color: theme.colors.onSurfaceVariant,
+                              }}
+                            >
+                              {formattedDate}
+                            </Text>
+                          </View>
+                        </View>
+
+                        {/* Số tiền */}
+                        <View style={{ alignItems: "flex-end" }}>
+                          <Text
+                            style={{
+                              fontSize: 18,
+                              fontWeight: "700",
+                              color: item.amount > 0 ? "#10b981" : "#ef4444",
+                              marginBottom: 2,
+                            }}
+                          >
+                            {item.amount > 0 ? "+" : ""}
+                            {Math.abs(item.amount).toLocaleString()} đ
+                          </Text>
+                          <Text
+                            style={{
+                              fontSize: 12,
+                              color: theme.colors.onSurfaceVariant,
+                              textTransform: "uppercase",
+                              letterSpacing: 0.5,
+                            }}
+                          >
+                            {item.amount > 0 ? "Thu nhập" : "Chi tiêu"}
+                          </Text>
+                        </View>
+                      </View>
+                    </Card.Content>
+                  </Card>
                 </Swipeable>
-                <TouchableOpacity
-                  style={{
-                    padding: 8,
-                    marginLeft: 8,
-                    backgroundColor: "#ef4444",
-                    borderRadius: 4,
-                    justifyContent: "center",
-                    alignItems: "center",
-                  }}
-                  onPress={() => {
-                    if (Platform.OS === "web") {
-                      const confirmed = window.confirm(
-                        "Bạn có chắc muốn xóa giao dịch này?",
-                      );
-                      if (confirmed) {
-                        handleDeleteTransaction(item.id);
-                      }
-                    } else {
-                      Alert.alert(
-                        "Xác nhận xóa",
-                        "Bạn có chắc muốn xóa giao dịch này?",
-                        [
-                          { text: "Hủy", style: "cancel" },
-                          {
-                            text: "Xóa",
-                            style: "destructive",
-                            onPress: () => handleDeleteTransaction(item.id),
-                          },
-                        ],
-                      );
-                    }
-                  }}
-                >
-                  <Text
-                    style={{ color: "white", fontSize: 12, fontWeight: "bold" }}
-                  >
-                    Xóa
-                  </Text>
-                </TouchableOpacity>
               </View>
             );
           }}
@@ -826,7 +1265,9 @@ function HomeScreen({ navigation }: any) {
       <Portal>
         <Modal
           visible={visible}
-          onDismiss={() => setVisible(false)}
+          onDismiss={() => {
+            setVisible(false);
+          }}
           contentContainerStyle={homeStyles.modalContainer}
         >
           <Title
@@ -1026,13 +1467,112 @@ function HomeScreen({ navigation }: any) {
               </Card.Content>
             </Card>
 
+            {/* Ngân sách chi tiêu */}
+            <Title
+              style={{
+                fontSize: 18,
+                marginBottom: 16,
+                color: theme.colors.primary,
+              }}
+            >
+              🎯 Ngân sách chi tiêu
+            </Title>
+            <Text
+              style={{
+                marginBottom: 12,
+                color: theme.colors.onSurfaceVariant,
+              }}
+            >
+              Đặt hạn mức cho các danh mục chi tiêu hàng tháng. App sẽ cảnh báo
+              khi bạn sắp vượt hạn mức.
+            </Text>
+            {CATEGORIES.expense.map((cat) => {
+              const budget = budgets[cat.label] || 0;
+              const spent = getMonthlyCategoryExpense(cat.label);
+              const ratio = budget > 0 ? spent / budget : 0;
+              const status =
+                budget > 0
+                  ? ratio >= 1
+                    ? "over"
+                    : ratio >= 0.9
+                      ? "near"
+                      : "ok"
+                  : "none";
+              return (
+                <View key={cat.label} style={{ marginBottom: 16 }}>
+                  <Text style={{ fontWeight: "bold", marginBottom: 4 }}>
+                    {cat.label}
+                  </Text>
+                  <Text
+                    style={{
+                      marginBottom: 8,
+                      color:
+                        status === "over"
+                          ? "#b91c1c"
+                          : status === "near"
+                            ? "#b45309"
+                            : theme.colors.onSurfaceVariant,
+                    }}
+                  >
+                    {budget > 0
+                      ? `Đã dùng ${spent.toLocaleString()} đ / ${budget.toLocaleString()} đ (${(ratio * 100).toFixed(1)}%)`
+                      : `Đã dùng ${spent.toLocaleString()} đ`}
+                  </Text>
+                  {budget > 0 && (
+                    <ProgressBar
+                      progress={Math.min(ratio, 1)}
+                      color={
+                        status === "over"
+                          ? "#b91c1c"
+                          : status === "near"
+                            ? "#b45309"
+                            : "#10b981"
+                      }
+                      style={{ height: 8, borderRadius: 4, marginBottom: 8 }}
+                    />
+                  )}
+                  <TextInput
+                    label="Hạn mức tháng (đ)"
+                    value={budgetInputs[cat.label] || ""}
+                    onChangeText={(value) =>
+                      handleBudgetInputChange(cat.label, value)
+                    }
+                    keyboardType="numeric"
+                    mode="outlined"
+                    style={homeStyles.input}
+                    right={<TextInput.Affix text="đ" />}
+                  />
+                </View>
+              );
+            })}
+            <Button
+              mode="contained"
+              onPress={handleSaveBudgets}
+              loading={budgetSaving}
+              style={{ marginBottom: 20, backgroundColor: "#10b981" }}
+            >
+              Lưu ngân sách
+            </Button>
+
             {/* Buttons */}
-            <View style={homeStyles.buttonRow}>
+            <View style={{ flexDirection: "row", marginTop: 20, gap: 8 }}>
               <Button
                 onPress={() => setProfileVisible(false)}
-                style={{ flex: 1, marginRight: 8 }}
+                style={{ flex: 1 }}
               >
                 Đóng
+              </Button>
+              <Button
+                mode="outlined"
+                loading={exportLoading}
+                onPress={handleExportReport}
+                style={{
+                  flex: 1,
+                  borderColor: theme.colors.primary,
+                }}
+                textColor={theme.colors.primary}
+              >
+                📊 Xuất báo cáo
               </Button>
               <Button
                 mode="contained"
@@ -1048,7 +1588,6 @@ function HomeScreen({ navigation }: any) {
                 }}
                 style={{
                   flex: 1,
-                  marginLeft: 8,
                   backgroundColor: "#ef4444",
                 }}
               >
@@ -1236,6 +1775,18 @@ const homeStyles = StyleSheet.create({
     marginBottom: 12,
     paddingVertical: 8,
     ...commonShadow,
+  },
+  transactionCard: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    marginBottom: 8,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    borderWidth: 1,
+    borderColor: "#f1f5f9",
   },
   listIcon: {
     backgroundColor: "#f1f5f9",
